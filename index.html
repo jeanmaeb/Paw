@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>PawScan — Dog Breed Identifier</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#09090f">
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+<style>
+  :root {
+    --bg: #09090f;
+    --surface: #111118;
+    --card: #16161f;
+    --border: rgba(255,255,255,0.07);
+    --accent: #7c6dfa;
+    --accent2: #fa6d9a;
+    --accent3: #6dfab0;
+    --text: #f0f0ff;
+    --muted: #8888aa;
+    --radius: 20px;
+    --glow: 0 0 40px rgba(124,109,250,0.25);
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
+
+  /* ── SPLASH ── */
+  #splash {
+    position: fixed; inset: 0; z-index: 999;
+    background: var(--bg);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px;
+    transition: opacity 0.8s ease, visibility 0.8s ease;
+  }
+  #splash.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+
+  .splash-logo {
+    width: 100px; height: 100px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 28px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 52px;
+    box-shadow: 0 0 60px rgba(124,109,250,0.5);
+    animation: pulse-logo 2s ease-in-out infinite;
+  }
+  @keyframes pulse-logo {
+    0%,100% { transform: scale(1); box-shadow: 0 0 60px rgba(124,109,250,0.4); }
+    50%      { transform: scale(1.06); box-shadow: 0 0 90px rgba(124,109,250,0.7); }
+  }
+
+  .splash-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 36px; font-weight: 800;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    letter-spacing: -1px;
+  }
+  .splash-sub { color: var(--muted); font-size: 14px; letter-spacing: 0.05em; }
+
+  .loader-bar {
+    width: 200px; height: 3px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 99px; overflow: hidden;
+  }
+  .loader-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border-radius: 99px;
+    width: 0%;
+    transition: width 0.4s ease;
+  }
+  .splash-status { color: var(--muted); font-size: 13px; }
+
+  /* ── MAIN LAYOUT ── */
+  #app { display: flex; flex-direction: column; min-height: 100dvh; max-width: 480px; margin: 0 auto; }
+
+  /* ── HEADER ── */
+  header {
+    padding: 20px 20px 0;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .logo-row { display: flex; align-items: center; gap: 12px; }
+  .logo-icon {
+    width: 42px; height: 42px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px;
+  }
+  .logo-text { font-family: 'Syne', sans-serif; font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
+  .logo-text span { background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+  .model-badge {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 12px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 99px; font-size: 12px; color: var(--muted);
+    transition: all 0.4s;
+  }
+  .model-badge.ready { color: var(--accent3); border-color: rgba(109,250,176,0.25); }
+  .model-badge .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--muted); transition: background 0.4s;
+  }
+  .model-badge.ready .dot { background: var(--accent3); box-shadow: 0 0 8px var(--accent3); animation: blink 2s infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* ── TABS ── */
+  .tab-row {
+    display: flex; gap: 8px;
+    padding: 20px 20px 0;
+  }
+  .tab-btn {
+    flex: 1; padding: 11px 0;
+    border: 1px solid var(--border);
+    background: var(--card); border-radius: 12px;
+    color: var(--muted); font-family: 'DM Sans', sans-serif;
+    font-size: 13px; font-weight: 500; cursor: pointer;
+    transition: all 0.25s;
+  }
+  .tab-btn.active {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #fff; border-color: transparent;
+    box-shadow: var(--glow);
+  }
+
+  /* ── PANELS ── */
+  .panel { display: none; flex-direction: column; gap: 16px; padding: 16px 20px 100px; }
+  .panel.active { display: flex; }
+
+  /* ── CAMERA PANEL ── */
+  .camera-wrap {
+    position: relative;
+    width: 100%; aspect-ratio: 4/3;
+    background: var(--card); border-radius: var(--radius);
+    overflow: hidden; border: 1px solid var(--border);
+  }
+  #videoEl {
+    width: 100%; height: 100%; object-fit: cover;
+    transform: scaleX(-1);
+  }
+  .cam-overlay {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 12px;
+    background: rgba(9,9,15,0.7); backdrop-filter: blur(4px);
+  }
+  .cam-overlay.hidden { display: none; }
+  .cam-guide {
+    position: absolute; inset: 0; pointer-events: none;
+  }
+  .corner {
+    position: absolute; width: 28px; height: 28px;
+    border-color: var(--accent); border-style: solid; opacity: 0.7;
+  }
+  .corner.tl { top: 16px; left: 16px; border-width: 3px 0 0 3px; border-radius: 4px 0 0 0; }
+  .corner.tr { top: 16px; right: 16px; border-width: 3px 3px 0 0; border-radius: 0 4px 0 0; }
+  .corner.bl { bottom: 16px; left: 16px; border-width: 0 0 3px 3px; border-radius: 0 0 0 4px; }
+  .corner.br { bottom: 16px; right: 16px; border-width: 0 3px 3px 0; border-radius: 0 0 4px 0; }
+
+  .scan-line {
+    position: absolute; left: 16px; right: 16px; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    top: 20%; animation: scan 2.4s ease-in-out infinite;
+    opacity: 0; transition: opacity 0.4s;
+  }
+  .scan-line.active { opacity: 1; }
+  @keyframes scan {
+    0%   { top: 10%; }
+    50%  { top: 85%; }
+    100% { top: 10%; }
+  }
+
+  .live-result {
+    position: absolute; bottom: 14px; left: 14px; right: 14px;
+    background: rgba(9,9,15,0.85); backdrop-filter: blur(12px);
+    border: 1px solid var(--border); border-radius: 14px;
+    padding: 12px 16px;
+    display: flex; align-items: center; justify-content: space-between;
+    opacity: 0; transition: opacity 0.4s;
+  }
+  .live-result.visible { opacity: 1; }
+  .live-breed { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 700; }
+  .live-conf { font-size: 12px; color: var(--muted); }
+
+  /* ── BUTTONS ── */
+  .btn-primary {
+    width: 100%; padding: 16px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: none; border-radius: 14px;
+    color: #fff; font-family: 'Syne', sans-serif;
+    font-size: 15px; font-weight: 700; letter-spacing: 0.02em;
+    cursor: pointer; transition: transform 0.2s, box-shadow 0.2s;
+    box-shadow: var(--glow);
+  }
+  .btn-primary:active { transform: scale(0.97); }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+  .btn-secondary {
+    width: 100%; padding: 14px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px; color: var(--text);
+    font-family: 'DM Sans', sans-serif; font-size: 14px; font-weight: 500;
+    cursor: pointer; transition: background 0.2s, border-color 0.2s;
+  }
+  .btn-secondary:hover { border-color: var(--accent); background: rgba(124,109,250,0.08); }
+  .btn-danger {
+    padding: 10px 18px;
+    background: rgba(250,109,154,0.12); border: 1px solid rgba(250,109,154,0.3);
+    border-radius: 10px; color: var(--accent2);
+    font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500;
+    cursor: pointer; transition: all 0.2s;
+  }
+  .btn-danger:hover { background: rgba(250,109,154,0.22); }
+
+  /* ── UPLOAD PANEL ── */
+  .upload-drop {
+    width: 100%; aspect-ratio: 4/3;
+    border: 2px dashed var(--border); border-radius: var(--radius);
+    background: var(--card); cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+    transition: border-color 0.3s, background 0.3s;
+    overflow: hidden; position: relative;
+  }
+  .upload-drop:hover, .upload-drop.dragover {
+    border-color: var(--accent);
+    background: rgba(124,109,250,0.05);
+  }
+  .upload-drop .drop-icon { font-size: 44px; line-height: 1; }
+  .upload-drop .drop-text { color: var(--muted); font-size: 14px; text-align: center; }
+  .upload-drop .drop-text strong { color: var(--text); }
+  #previewImg {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; display: none;
+  }
+
+  /* ── RESULT CARD ── */
+  .result-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
+    animation: slide-up 0.4s ease;
+  }
+  @keyframes slide-up {
+    from { opacity:0; transform: translateY(20px); }
+    to   { opacity:1; transform: translateY(0); }
+  }
+  .result-header {
+    padding: 18px 20px;
+    background: linear-gradient(135deg, rgba(124,109,250,0.15), rgba(250,109,154,0.1));
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .result-breed { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800; }
+  .result-conf-pill {
+    padding: 5px 12px;
+    background: rgba(109,250,176,0.15); border: 1px solid rgba(109,250,176,0.3);
+    border-radius: 99px; font-size: 12px; font-weight: 600; color: var(--accent3);
+  }
+  .result-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+
+  .info-row { display: flex; gap: 10px; }
+  .info-chip {
+    flex: 1; padding: 12px;
+    background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+    border-radius: 12px; text-align: center;
+  }
+  .info-chip .label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 4px; }
+  .info-chip .value { font-family: 'Syne', sans-serif; font-size: 13px; font-weight: 700; }
+
+  .desc-text { font-size: 14px; color: var(--muted); line-height: 1.65; }
+
+  .tags-row { display: flex; flex-wrap: wrap; gap: 7px; }
+  .tag {
+    padding: 5px 12px;
+    background: rgba(124,109,250,0.12); border: 1px solid rgba(124,109,250,0.25);
+    border-radius: 99px; font-size: 12px; color: var(--accent);
+  }
+
+  .facts-label { font-family: 'Syne', sans-serif; font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .fact-item { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--muted); }
+  .fact-item::before { content: '✦'; color: var(--accent); flex-shrink: 0; font-size: 10px; margin-top: 2px; }
+
+  /* ── HISTORY PANEL ── */
+  .history-header { display: flex; align-items: center; justify-content: space-between; }
+  .history-header h2 { font-family: 'Syne', sans-serif; font-size: 18px; font-weight: 700; }
+
+  .history-list { display: flex; flex-direction: column; gap: 12px; }
+  .history-item {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px; padding: 12px;
+    animation: slide-up 0.3s ease;
+  }
+  .hist-thumb {
+    width: 56px; height: 56px; border-radius: 10px;
+    object-fit: cover; flex-shrink: 0;
+    background: var(--surface);
+  }
+  .hist-info { flex: 1; min-width: 0; }
+  .hist-breed { font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hist-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .hist-conf { font-size: 12px; font-weight: 600; color: var(--accent); margin-top: 3px; }
+
+  .empty-state {
+    text-align: center; padding: 60px 20px;
+    color: var(--muted); font-size: 15px;
+  }
+  .empty-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.5; }
+
+  /* ── SECTION LABEL ── */
+  .section-label {
+    font-family: 'Syne', sans-serif; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--muted); margin-bottom: -4px;
+  }
+
+  /* ── CANVAS (hidden, for prediction) ── */
+  #offscreen { display: none; }
+
+  /* ── NAV ── */
+  nav {
+    position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+    width: 100%; max-width: 480px;
+    background: rgba(9,9,15,0.88); backdrop-filter: blur(20px);
+    border-top: 1px solid var(--border);
+    display: flex; padding: 10px 20px calc(10px + env(safe-area-inset-bottom));
+    gap: 4px; z-index: 100;
+  }
+  .nav-btn {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 8px 4px; border: none; background: none; cursor: pointer;
+    border-radius: 12px; transition: background 0.2s; color: var(--muted);
+    font-family: 'DM Sans', sans-serif; font-size: 11px;
+  }
+  .nav-btn.active { color: var(--accent); background: rgba(124,109,250,0.1); }
+  .nav-icon { font-size: 22px; line-height: 1; }
+
+  /* ── TOAST ── */
+  #toast {
+    position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px 20px;
+    font-size: 13px; color: var(--text);
+    opacity: 0; pointer-events: none; transition: opacity 0.3s;
+    z-index: 200; white-space: nowrap;
+  }
+  #toast.show { opacity: 1; }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+  input[type=file] { display: none; }
+
+  .cam-btn-row { display: flex; gap: 10px; }
+
+  .confidence-bar-wrap { margin-top: 6px; }
+  .confidence-bar-label { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  .confidence-bar-bg { height: 6px; background: rgba(255,255,255,0.07); border-radius: 99px; overflow: hidden; }
+  .confidence-bar-fill { height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width 0.6s ease; }
+</style>
+</head>
+<body>
+
+<!-- SPLASH -->
+<div id="splash">
+  <div class="splash-logo">🐾</div>
+  <div class="splash-title">PawScan AI</div>
+  <div class="splash-sub">Dog Breed Identifier</div>
+  <div class="loader-bar"><div class="loader-fill" id="loaderFill"></div></div>
+  <div class="splash-status" id="splashStatus">Initializing…</div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app">
+  <header>
+    <div class="logo-row">
+      <div class="logo-icon">🐾</div>
+      <div class="logo-text"><span>PawScan</span> AI</div>
+    </div>
+    <div class="model-badge" id="modelBadge">
+      <div class="dot"></div>
+      <span id="modelBadgeText">Loading…</span>
+    </div>
+  </header>
+
+  <div class="tab-row">
+    <button class="tab-btn active" onclick="switchTab('camera')">📷 Camera</button>
+    <button class="tab-btn" onclick="switchTab('upload')">🖼️ Upload</button>
+    <button class="tab-btn" onclick="switchTab('history')">🕓 History</button>
+  </div>
+
+  <!-- CAMERA PANEL -->
+  <div class="panel active" id="panel-camera">
+    <div class="camera-wrap">
+      <video id="videoEl" autoplay muted playsinline></video>
+      <div class="cam-overlay" id="camOverlay">
+        <div style="font-size:40px">📷</div>
+        <div style="color:var(--muted);font-size:14px;text-align:center">Tap "Start Camera"<br>to begin live detection</div>
+      </div>
+      <div class="cam-guide">
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner bl"></div>
+        <div class="corner br"></div>
+      </div>
+      <div class="scan-line" id="scanLine"></div>
+      <div class="live-result" id="liveResult">
+        <div>
+          <div class="live-breed" id="liveBreed">—</div>
+          <div class="live-conf" id="liveConf">Detecting…</div>
+        </div>
+        <div style="font-size:26px" id="liveEmoji">🐶</div>
+      </div>
+    </div>
+
+    <div class="cam-btn-row">
+      <button class="btn-primary" id="btnStartCam" style="flex:1" onclick="toggleCamera()">▶ Start Camera</button>
+      <button class="btn-secondary" id="btnFlip" style="width:auto;padding:14px 16px;font-size:20px" onclick="flipCamera()" disabled title="Flip Camera">🔄</button>
+      <button class="btn-secondary" id="btnCapture" style="width:auto;padding:14px 16px;font-size:20px" onclick="captureFrame()" disabled title="Capture">📸</button>
+    </div>
+
+    <div id="cameraBreedResult"></div>
+  </div>
+
+  <!-- UPLOAD PANEL -->
+  <div class="panel" id="panel-upload">
+    <div class="upload-drop" id="uploadDrop" onclick="document.getElementById('fileInput').click()">
+      <div class="drop-icon">📁</div>
+      <div class="drop-text"><strong>Tap to choose photo</strong><br>or drag & drop here</div>
+      <img id="previewImg" alt="preview" />
+    </div>
+    <input type="file" id="fileInput" accept="image/*" onchange="handleFile(event)" />
+
+    <button class="btn-primary" id="btnPredict" onclick="predictUpload()" disabled>🔍 Identify Breed</button>
+
+    <div id="uploadResult"></div>
+  </div>
+
+  <!-- HISTORY PANEL -->
+  <div class="panel" id="panel-history">
+    <div class="history-header">
+      <h2>Past Detections</h2>
+      <button class="btn-danger" onclick="clearHistory()">Clear All</button>
+    </div>
+    <div class="history-list" id="historyList"></div>
+  </div>
+</div>
+
+<!-- BOTTOM NAV -->
+<nav>
+  <button class="nav-btn active" id="nav-camera" onclick="switchTab('camera')">
+    <span class="nav-icon">📷</span>Camera
+  </button>
+  <button class="nav-btn" id="nav-upload" onclick="switchTab('upload')">
+    <span class="nav-icon">🖼️</span>Upload
+  </button>
+  <button class="nav-btn" id="nav-history" onclick="switchTab('history')">
+    <span class="nav-icon">🕓</span>History
+  </button>
+</nav>
+
+<canvas id="offscreen"></canvas>
+<div id="toast"></div>
+
+<script>
+// ─── BREED DATA ────────────────────────────────────────────────────────────────
+const BREED_DATA = {
+  "Golden Retriever": {
+    emoji: "🐕",
+    description: "The quintessential family companion, Golden Retrievers are renowned for their gentle nature and unconditional love. Originally bred as gun dogs in Scotland, they excel as therapy, guide, and search-and-rescue dogs.",
+    temperament: ["Friendly", "Loyal", "Intelligent", "Trustworthy"],
+    lifespan: "10–12 years",
+    size: "Large (55–75 lbs)",
+    facts: [
+      "Golden Retrievers have a water-repellent double coat originally suited for retrieving waterfowl.",
+      "They consistently rank in the top 3 most popular dog breeds in the USA.",
+      "President Gerald Ford owned a famous Golden Retriever named Liberty.",
+      "They can carry an egg in their mouth without breaking it — that's a soft mouth!"
+    ]
+  },
+  "Shih Tzu": {
+    emoji: "🐩",
+    description: "Shih Tzus were bred for centuries as royal lap dogs in the Chinese imperial court. Despite their small frame, they carry a bold and affectionate personality, thriving on human companionship.",
+    temperament: ["Affectionate", "Playful", "Outgoing", "Alert"],
+    lifespan: "10–16 years",
+    size: "Small (9–16 lbs)",
+    facts: [
+      "The name 'Shih Tzu' literally means 'lion dog' in Mandarin Chinese.",
+      "They were so prized in ancient China that for years the Chinese refused to sell or trade them.",
+      "Unlike most dogs, Shih Tzus have hair (not fur), making them hypoallergenic-friendly.",
+      "They are known to be expert 'lap warmers' and will follow you from room to room."
+    ]
+  },
+  "Pug": {
+    emoji: "😄",
+    description: "Pugs are the jokers of the dog world — compact, charming, and endlessly entertaining. Their squished face and curly tail make them unmistakable, while their clownish personality keeps owners laughing.",
+    temperament: ["Charming", "Social", "Mischievous", "Loving"],
+    lifespan: "13–15 years",
+    size: "Small (14–18 lbs)",
+    facts: [
+      "A group of Pugs is called a 'grumble' — perfectly fitting their snorty vocal style.",
+      "Pugs were bred as lap dogs for Chinese emperors and lived in luxurious conditions.",
+      "Napoleon's wife Josephine had a Pug named Fortune who reportedly bit Napoleon on their wedding night.",
+      "Their flat face is caused by a gene mutation called brachycephaly."
+    ]
+  },
+  "Siberian Husky": {
+    emoji: "🐺",
+    description: "Siberian Huskies are powerful working sled dogs bred by the Chukchi people of Siberia. Built for endurance in extreme cold, they combine raw athleticism with a free-spirited, wolf-like mystique.",
+    temperament: ["Energetic", "Independent", "Friendly", "Adventurous"],
+    lifespan: "12–14 years",
+    size: "Medium (35–60 lbs)",
+    facts: [
+      "Huskies can run up to 100 miles per day in sled races at speeds of 10–15 mph.",
+      "A team of Huskies famously delivered diphtheria antitoxin to Nome, Alaska in 1925, inspiring the Iditarod race.",
+      "They have a double coat that insulates them in temperatures as low as -60°F (−51°C).",
+      "Huskies are known escape artists — they can jump fences, dig under barriers, or simply slip a collar."
+    ]
+  },
+  "Chow Chow": {
+    emoji: "🦁",
+    description: "One of the oldest and most distinctive breeds, Chow Chows are often described as cat-like in behavior — aloof, independent, and deeply loyal to their chosen person. Their lion-like mane is legendary.",
+    temperament: ["Calm", "Independent", "Protective", "Dignified"],
+    lifespan: "8–12 years",
+    size: "Medium-Large (45–70 lbs)",
+    facts: [
+      "Chow Chows have a blue-black tongue — one of their most distinctive features shared only with bears.",
+      "They are one of the few breeds with a straight hind leg, giving them a distinctive stilted gait.",
+      "Ancient Chinese emperors kept thousands of Chow Chows as hunting and guard dogs.",
+      "Sigmund Freud and Martha Stewart are both famous Chow Chow enthusiasts."
+    ]
+  }
+};
+
+// ─── STATE ─────────────────────────────────────────────────────────────────────
+let model = null;
+let metadata = null;
+let classLabels = [];
+let cameraActive = false;
+let predictionInterval = null;
+let currentUploadDataURL = null;
+let currentFacingMode = 'environment'; // 'environment' = rear, 'user' = front
+
+// ─── SPLASH & MODEL LOADING ───────────────────────────────────────────────────
+async function loadModel() {
+  const fill = document.getElementById('loaderFill');
+  const status = document.getElementById('splashStatus');
+
+  try {
+    status.textContent = 'Loading TensorFlow.js…';
+    fill.style.width = '20%';
+    await tf.ready();
+
+    status.textContent = 'Loading breed metadata…';
+    fill.style.width = '45%';
+    const metaRes = await fetch('trained_model/metadata.json');
+    metadata = await metaRes.json();
+    classLabels = metadata.labels || ["Golden Retriever","Shih Tzu","Pug","Siberian Husky","Chow Chow"];
+
+    status.textContent = 'Loading AI model…';
+    fill.style.width = '70%';
+    model = await tf.loadLayersModel('trained_model/model.json');
+
+    fill.style.width = '100%';
+    status.textContent = 'Model ready ✓';
+    setModelReady(true);
+  } catch(e) {
+    console.warn('Model load error:', e);
+    // Fallback: use demo mode
+    classLabels = ["Golden Retriever","Shih Tzu","Pug","Siberian Husky","Chow Chow"];
+    fill.style.width = '100%';
+    status.textContent = 'Demo mode (model not found)';
+    setModelReady(false);
+    showToast('⚠️ Model not found — running in demo mode');
+  }
+
+  setTimeout(hideSplash, 600);
+}
+
+function setModelReady(ready) {
+  const badge = document.getElementById('modelBadge');
+  const badgeText = document.getElementById('modelBadgeText');
+  if(ready) {
+    badge.classList.add('ready');
+    badgeText.textContent = 'Model ready ✓';
+  } else {
+    badgeText.textContent = 'Demo mode';
+  }
+  document.getElementById('btnStartCam').disabled = false;
+  document.getElementById('btnPredict').disabled = !currentUploadDataURL;
+}
+
+function hideSplash() {
+  document.getElementById('splash').classList.add('hidden');
+}
+
+// ─── TABS ──────────────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+
+  document.getElementById('panel-' + tab).classList.add('active');
+  document.querySelector(`[onclick="switchTab('${tab}')"].tab-btn`).classList.add('active');
+  document.getElementById('nav-' + tab).classList.add('active');
+
+  if(tab === 'history') renderHistory();
+  if(tab !== 'camera' && cameraActive) stopCamera();
+}
+
+// ─── CAMERA ───────────────────────────────────────────────────────────────────
+async function startCameraStream(facingMode) {
+  const video = document.getElementById('videoEl');
+
+  // Stop existing tracks first
+  if(video.srcObject) {
+    video.srcObject.getTracks().forEach(t => t.stop());
+    video.srcObject = null;
+  }
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: facingMode, width:{ideal:640}, height:{ideal:480} }, audio: false
+  });
+
+  video.srcObject = stream;
+  // Mirror only the front camera
+  video.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)';
+  await video.play();
+}
+
+async function toggleCamera() {
+  if(cameraActive) { stopCamera(); return; }
+
+  const btn = document.getElementById('btnStartCam');
+  btn.disabled = true; btn.textContent = 'Starting…';
+
+  try {
+    await startCameraStream(currentFacingMode);
+
+    document.getElementById('camOverlay').classList.add('hidden');
+    document.getElementById('scanLine').classList.add('active');
+    document.getElementById('liveResult').classList.add('visible');
+    document.getElementById('btnCapture').disabled = false;
+    document.getElementById('btnFlip').disabled = false;
+
+    btn.textContent = '⏹ Stop Camera';
+    btn.style.background = 'linear-gradient(135deg, #333, #555)';
+    btn.style.boxShadow = 'none';
+    btn.disabled = false;
+    cameraActive = true;
+
+    startLivePrediction();
+  } catch(err) {
+    btn.disabled = false;
+    btn.textContent = '▶ Start Camera';
+    showToast('❌ Camera access denied — check browser permissions');
+  }
+}
+
+async function flipCamera() {
+  if(!cameraActive) return;
+  const btn = document.getElementById('btnFlip');
+  btn.disabled = true;
+  btn.style.transition = 'transform 0.4s ease';
+  btn.style.transform = 'rotate(180deg)';
+
+  currentFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
+
+  try {
+    await startCameraStream(currentFacingMode);
+    showToast(currentFacingMode === 'user' ? '🤳 Switched to front camera' : '📷 Switched to rear camera');
+  } catch(err) {
+    // Revert if flip fails
+    currentFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
+    await startCameraStream(currentFacingMode);
+    showToast('⚠️ Could not switch camera');
+  }
+
+  setTimeout(() => {
+    btn.style.transform = 'rotate(0deg)';
+    btn.disabled = false;
+  }, 400);
+}
+
+function stopCamera() {
+  const video = document.getElementById('videoEl');
+  if(video.srcObject) {
+    video.srcObject.getTracks().forEach(t => t.stop());
+    video.srcObject = null;
+  }
+  clearInterval(predictionInterval);
+  cameraActive = false;
+
+  document.getElementById('camOverlay').classList.remove('hidden');
+  document.getElementById('scanLine').classList.remove('active');
+  document.getElementById('liveResult').classList.remove('visible');
+  document.getElementById('btnCapture').disabled = true;
+  document.getElementById('btnFlip').disabled = true;
+
+  const btn = document.getElementById('btnStartCam');
+  btn.textContent = '▶ Start Camera';
+  btn.style.background = '';
+  btn.style.boxShadow = '';
+}
+
+function startLivePrediction() {
+  predictionInterval = setInterval(async () => {
+    if(!cameraActive) return;
+    const video = document.getElementById('videoEl');
+    if(video.readyState < 2) return;
+    const result = await predictFromElement(video);
+    if(result) {
+      document.getElementById('liveBreed').textContent = result.label;
+      document.getElementById('liveConf').textContent = `${(result.confidence * 100).toFixed(1)}% confidence`;
+      document.getElementById('liveEmoji').textContent = BREED_DATA[result.label]?.emoji || '🐶';
+
+      renderBreedCard(result, 'cameraBreedResult');  
+    }
+  }, 1200);
+}
+
+async function captureFrame() {
+  const video = document.getElementById('videoEl');
+  const canvas = document.getElementById('offscreen');
+  canvas.width = video.videoWidth || 224;
+  canvas.height = video.videoHeight || 224;
+  const ctx = canvas.getContext('2d');
+  ctx.save(); ctx.scale(-1, 1); ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height); ctx.restore();
+  const dataURL = canvas.toDataURL('image/jpeg', 0.85);
+  const result = await predictFromElement(video);
+  if(result) {
+    renderBreedCard(result, 'cameraBreedResult');
+    saveHistory(result, dataURL);
+    showToast('📸 Captured & analyzed!');
+  }
+}
+
+// ─── UPLOAD ───────────────────────────────────────────────────────────────────
+function handleFile(e) {
+  const file = e.target.files[0];
+  if(!file || !file.type.startsWith('image/')) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    currentUploadDataURL = ev.target.result;
+    const img = document.getElementById('previewImg');
+    img.src = currentUploadDataURL;
+    img.style.display = 'block';
+    document.querySelector('#uploadDrop .drop-icon').style.display = 'none';
+    document.querySelector('#uploadDrop .drop-text').style.display = 'none';
+    if(model) document.getElementById('btnPredict').disabled = false;
+    document.getElementById('uploadResult').innerHTML = '';
+  };
+  reader.readAsDataURL(file);
+}
+
+// Drag & drop
+const drop = document.getElementById('uploadDrop');
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('dragover'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('dragover'));
+drop.addEventListener('drop', e => {
+  e.preventDefault(); drop.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if(file && file.type.startsWith('image/')) {
+    const dt = new DataTransfer(); dt.items.add(file);
+    document.getElementById('fileInput').files = dt.files;
+    handleFile({target:{files:[file]}});
+  }
+});
+
+async function predictUpload() {
+  if(!currentUploadDataURL) return;
+  const btn = document.getElementById('btnPredict');
+  btn.disabled = true; btn.textContent = '🔄 Analyzing…';
+
+  const img = document.getElementById('previewImg');
+  const result = await predictFromElement(img);
+
+  btn.disabled = false; btn.textContent = '🔍 Identify Breed';
+  if(result) {
+    renderBreedCard(result, 'uploadResult');
+    saveHistory(result, currentUploadDataURL);
+  }
+}
+
+// ─── PREDICTION ENGINE ────────────────────────────────────────────────────────
+async function predictFromElement(el) {
+  if(!model) {
+    // Demo mode: return random result
+    const idx = Math.floor(Math.random() * classLabels.length);
+    return { label: classLabels[idx], confidence: 0.65 + Math.random() * 0.3, allScores: [] };
+  }
+
+  return tf.tidy(() => {
+    try {
+      let tensor = tf.browser.fromPixels(el)
+        .resizeBilinear([224, 224])
+        .toFloat()
+        .div(255.0)
+        .expandDims(0);
+
+      const preds = model.predict(tensor);
+      const scores = preds.dataSync();
+      const maxIdx = scores.indexOf(Math.max(...scores));
+      return {
+        label: classLabels[maxIdx] || `Class ${maxIdx}`,
+        confidence: scores[maxIdx],
+        allScores: Array.from(scores).map((s, i) => ({ label: classLabels[i], score: s }))
+      };
+    } catch(e) {
+      console.error('Prediction error:', e);
+      return null;
+    }
+  });
+}
+
+// ─── BREED RESULT CARD ────────────────────────────────────────────────────────
+function renderBreedCard(result, containerId) {
+  const container = document.getElementById(containerId);
+  const data = BREED_DATA[result.label] || {};
+  const conf = (result.confidence * 100).toFixed(1);
+
+  const tags = (data.temperament || ['Unknown']).map(t => `<span class="tag">${t}</span>`).join('');
+  const facts = (data.facts || ['No additional facts available.']).map(f => `<div class="fact-item">${f}</div>`).join('');
+
+  container.innerHTML = `
+    <div class="result-card">
+      <div class="result-header">
+        <div>
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:4px">Identified Breed</div>
+          <div class="result-breed">${data.emoji || '🐶'} ${result.label}</div>
+        </div>
+        <div class="result-conf-pill">${conf}%</div>
+      </div>
+      <div class="result-body">
+        <div class="confidence-bar-wrap">
+          <div class="confidence-bar-label"><span>Confidence</span><span>${conf}%</span></div>
+          <div class="confidence-bar-bg"><div class="confidence-bar-fill" style="width:${conf}%"></div></div>
+        </div>
+        <div class="info-row">
+          <div class="info-chip">
+            <div class="label">Lifespan</div>
+            <div class="value">${data.lifespan || 'N/A'}</div>
+          </div>
+          <div class="info-chip">
+            <div class="label">Size</div>
+            <div class="value">${data.size || 'N/A'}</div>
+          </div>
+        </div>
+        <p class="desc-text">${data.description || 'No description available.'}</p>
+        <div>
+          <div class="section-label" style="margin-bottom:8px">Temperament</div>
+          <div class="tags-row">${tags}</div>
+        </div>
+        <div>
+          <div class="facts-label" style="margin-bottom:10px">🔬 Fun Facts</div>
+          <div style="display:flex;flex-direction:column;gap:8px">${facts}</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+// ─── HISTORY ──────────────────────────────────────────────────────────────────
+function saveHistory(result, thumb) {
+  const history = getHistory();
+  history.unshift({
+    id: Date.now(),
+    breed: result.label,
+    confidence: result.confidence,
+    thumb: thumb,
+    time: new Date().toLocaleString()
+  });
+  localStorage.setItem('pawscan_history', JSON.stringify(history.slice(0, 50)));
+}
+
+function getHistory() {
+  try { return JSON.parse(localStorage.getItem('pawscan_history') || '[]'); }
+  catch { return []; }
+}
+
+function clearHistory() {
+  localStorage.removeItem('pawscan_history');
+  renderHistory();
+  showToast('🗑️ History cleared');
+}
+
+function renderHistory() {
+  const list = document.getElementById('historyList');
+  const history = getHistory();
+  if(!history.length) {
+    list.innerHTML = `<div class="empty-state"><div class="empty-icon">📭</div>No detections yet.<br>Use Camera or Upload to identify a breed!</div>`;
+    return;
+  }
+  list.innerHTML = history.map(h => `
+    <div class="history-item">
+      <img class="hist-thumb" src="${h.thumb}" alt="${h.breed}" />
+      <div class="hist-info">
+        <div class="hist-breed">${BREED_DATA[h.breed]?.emoji || '🐶'} ${h.breed}</div>
+        <div class="hist-meta">${h.time}</div>
+        <div class="hist-conf">${(h.confidence * 100).toFixed(1)}% confidence</div>
+      </div>
+    </div>`).join('');
+}
+
+// ─── TOAST ────────────────────────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+loadModel();
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("service-worker.js")
+      .then(() => console.log("SW registered"))
+      .catch(err => console.log("SW error", err));
+  });
+}
+</script>
+</body>
+</html>
